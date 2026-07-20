@@ -13,14 +13,21 @@
 
 import asyncio
 from datetime import datetime
-from time import perf_counter
 from pathlib import Path
-from typing import Any, Annotated, Literal
+from time import perf_counter
+from typing import Annotated, Any, Literal
 
 import httpx
 import pandas as pd
-from pydantic import BaseModel, Field, model_validator, HttpUrl, ValidationError, IPvAnyAddress
-
+import pytest
+from pydantic import (
+    BaseModel,
+    Field,
+    HttpUrl,
+    IPvAnyAddress,
+    ValidationError,
+    model_validator,
+)
 
 BASE_DIR = Path(__file__).resolve().parent
 OUTPUT_DIR = BASE_DIR / "output"
@@ -35,7 +42,11 @@ IP_URL = ("http://ip-api.com/json/8.8.8.8"
 # ============================================================
 # 1) 비동기 수집
 # ============================================================
-async def fetch_json(client: httpx.AsyncClient, api_name: str, url: str) -> dict[str, Any]:
+async def fetch_json(
+    client: httpx.AsyncClient,
+    api_name: str,
+    url: str,
+) -> dict[str, Any]:
     """API를 호출하고 HTTP 응답 상태를 확인"""
     response = await client.get(url)
     print(f"{api_name:<14}: HTTP {response.status_code}")
@@ -151,6 +162,7 @@ class CountrySchema(BaseModel):
     topLevelDomain: list[str] = Field(min_length=1)
     populationDensity: float = Field(ge=0)
 
+
 class IpSuccessSchema(BaseModel):
     """ip-api 정상 응답."""
 
@@ -169,6 +181,7 @@ class IpFailSchema(BaseModel):
 
     status: Literal["fail"]
     message: str = Field(min_length=1)
+
 
 CollectedRecord = WeatherSchema | CountrySchema | IpSuccessSchema
 
@@ -237,6 +250,57 @@ def save_and_compare(records: list[CollectedRecord]) -> None:
     print(f"Parquet 쓰기: {parquet_write_time:.4f}s, 읽기: {parquet_read_time:.4f}s")
 
     print(f"\n파일 저장 완료: {csv_path.name}, {parquet_path.name}")
+
+
+# ============================================================
+# 4. pytest 스키마 테스트 + Ruff 검사
+# 실행: pytest main.py -q
+# 실행: ruff check main.py --select E,F,I,UP
+# ============================================================
+def make_weather_data() -> dict:
+    """테스트에 사용할 정상 날씨 데이터를 반환"""
+    return {
+        "latitude": 37.5665,
+        "longitude": 126.9780,
+        "generationtime_ms": 1.23,
+        "utc_offset_seconds": 32400,
+        "timezone": "Asia/Seoul",
+        "timezone_abbreviation": "KST",
+        "elevation": 38.0,
+        "hourly_units": {
+            "time": "iso8601",
+            "temperature_2m": "°C",
+            "precipitation_probability": "%",
+        },
+        "hourly": {
+            "time": [
+                "2024-06-01T00:00",
+                "2024-06-01T01:00",
+            ],
+            "temperature_2m": [20.5, 19.8],
+            "precipitation_probability": [10, 20],
+        },
+    }
+
+
+def test_valid_weather_schema() -> None:
+    """정상 날씨 데이터가 검증을 통과하는지 검사"""
+    valid_data = WeatherSchema.model_validate(make_weather_data())
+
+    assert isinstance(valid_data, WeatherSchema)
+    assert valid_data.latitude == 37.5665
+    assert len(valid_data.hourly.time) == 2
+
+
+def test_invalid_weather_latitude() -> None:
+    """범위를 벗어난 위도가 거부되는지 검사"""
+    invalid_data = make_weather_data()
+    invalid_data["latitude"] = 9999.0
+
+    with pytest.raises(ValidationError) as error:
+        WeatherSchema.model_validate(invalid_data)
+
+    assert "latitude" in str(error.value)
 
 
 # ============================================================

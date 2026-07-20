@@ -2,3 +2,5 @@ httpx
 pydantic
 pandas
 pyarrow
+pytest
+ruff

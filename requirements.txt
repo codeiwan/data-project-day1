@@ -22,10 +22,20 @@ idna==3.18
     # via
     #   anyio
     #   httpx
+numpy==2.4.6
+    # via pandas
+pandas==3.0.3
+    # via -r requirements.in
+pyarrow==25.0.0
+    # via -r requirements.in
 pydantic==2.13.4
     # via -r requirements.in
 pydantic-core==2.46.4
     # via pydantic
+python-dateutil==2.9.0.post0
+    # via pandas
+six==1.17.0
+    # via python-dateutil
 typing-extensions==4.16.0
     # via
     #   anyio

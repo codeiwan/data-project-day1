@@ -16,7 +16,9 @@ from datetime import datetime
 from time import perf_counter
 from pathlib import Path
 from typing import Any, Annotated, Literal
+
 import httpx
+import pandas as pd
 from pydantic import BaseModel, Field, model_validator, HttpUrl, ValidationError, IPvAnyAddress
 
 
@@ -191,6 +193,53 @@ def validate_data(
 
 
 # ============================================================
+# 3) CSV와 Parquet 저장 성능 비교
+# ============================================================
+def save_and_compare(records: list[CollectedRecord]) -> None:
+    """검증 데이터를 CSV와 Parquet로 저장하고, 저장 속도를 비교한다."""
+    OUTPUT_DIR.mkdir(exist_ok=True)
+    
+    # CSV, Parquet 저장 경로
+    csv_path = OUTPUT_DIR / "collected_data.csv"
+    parquet_path = OUTPUT_DIR / "collected_data.parquet"
+
+    # CSV와 Parquet 저장 속도 비교를 위해 각 저장 시간을 측정
+    rows = [record.model_dump(mode="json") for record in records]
+    dataframe = pd.DataFrame(rows)
+
+    # 쓰기 속도 측정
+    start = perf_counter()
+    dataframe.to_csv(csv_path, index=False, encoding="utf-8-sig")
+    csv_write_time = perf_counter() - start
+
+    start = perf_counter()
+    dataframe.to_parquet(parquet_path, index=False)
+    parquet_write_time = perf_counter() - start
+
+    # 읽기 속도 측정
+    start = perf_counter()
+    csv_rows = len(pd.read_csv(csv_path))
+    csv_read_time = perf_counter() - start
+
+    start = perf_counter()
+    parquet_rows = len(pd.read_parquet(parquet_path))
+    parquet_read_time = perf_counter() - start
+
+    try:
+        assert csv_rows == parquet_rows == len(records)
+    except AssertionError:
+        raise ValueError(
+            f"CSV({csv_rows})와 Parquet({parquet_rows}) 레코드 수가 "
+            f"검증된 레코드 수({len(records)})와 다릅니다."
+        )
+    
+    print(f"CSV 쓰기: {csv_write_time:.4f}s, 읽기: {csv_read_time:.4f}s")
+    print(f"Parquet 쓰기: {parquet_write_time:.4f}s, 읽기: {parquet_read_time:.4f}s")
+
+    print(f"\n파일 저장 완료: {csv_path.name}, {parquet_path.name}")
+
+
+# ============================================================
 # 메인 실행
 # ============================================================
 def main() -> None:
@@ -205,6 +254,9 @@ def main() -> None:
         
         for record in validated_data:
             print(f"- {record.__class__.__name__}: 검증 성공")
+
+        print("\n--------- 3) CSV와 Parquet 저장 성능 비교 ---------")
+        save_and_compare(validated_data)
 
     except httpx.HTTPError as error:
         print(f"HTTP 요청 실패: {error}")

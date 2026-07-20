@@ -1,2 +1,4 @@
 httpx
 pydantic
+pandas
+pyarrow

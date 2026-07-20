@@ -75,7 +75,6 @@ Probability = Annotated[int, Field(ge=0, le=100)]
 
 class HourlyUnits(BaseModel):
     """Open-Meteo 시간별 데이터 단위."""
-
     time: Literal["iso8601"]
     temperature_2m: Literal["°C"]
     precipitation_probability: Literal["%"]
@@ -83,7 +82,6 @@ class HourlyUnits(BaseModel):
 
 class HourlyWeather(BaseModel):
     """시간·기온·강수확률 배열."""
-
     time: list[datetime] = Field(min_length=1)
     temperature_2m: list[Temperature] = Field(min_length=1)
     precipitation_probability: list[Probability] = Field(min_length=1)
@@ -136,7 +134,6 @@ class Currency(BaseModel):
 
 class CountrySchema(BaseModel):
     """대한민국 국가 정보."""
-
     area: float = Field(gt=0)
     cioc: str = Field(pattern=r"^[A-Z]{3}$")
     flag: str = Field(min_length=1)
@@ -165,7 +162,6 @@ class CountrySchema(BaseModel):
 
 class IpSuccessSchema(BaseModel):
     """ip-api 정상 응답."""
-
     status: Literal["success"]
     query: IPvAnyAddress
     country: str = Field(min_length=1)
@@ -178,7 +174,6 @@ class IpSuccessSchema(BaseModel):
 
 class IpFailSchema(BaseModel):
     """ip-api 실패 응답."""
-
     status: Literal["fail"]
     message: str = Field(min_length=1)
 

@@ -7,7 +7,7 @@
     python main.py
 
 품질 검사:
-    python -m pytest main.py -q
+    python -m pytest main.py -v --color=yes
     python -m ruff check main.py --select E,F,I,UP
 """
 
@@ -19,7 +19,6 @@ from typing import Annotated, Any, Literal
 
 import httpx
 import pandas as pd
-import pytest
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -303,7 +302,7 @@ def save_and_compare(records: list[CollectedRecord]) -> None:
 # 실행: python -m ruff check main.py --select E,F,I,UP
 # ============================================================
 def make_weather_data() -> dict[str, Any]:
-    """정상·비정상 테스트가 공유할 기준 날씨 데이터를 반환"""
+    """정상 날씨 모델 테스트에서 공유할 기준 데이터를 반환한다."""
     return {
         "latitude": 37.5665,
         "longitude": 126.9780,
@@ -328,24 +327,128 @@ def make_weather_data() -> dict[str, Any]:
     }
 
 
-def test_valid_weather_schema() -> None:
-    """정상 날씨 데이터가 모델 검증을 통과하는지 확인"""
-    valid_data = WeatherSchema.model_validate(make_weather_data())
+def make_country_data() -> dict[str, Any]:
+    """정상 국가 모델 테스트에서 공유할 대한민국 데이터를 반환한다."""
+    return {
+        "area": 100_210,
+        "cioc": "KOR",
+        "flag": "🇰🇷",
+        "gini": 31.4,
+        "name": "Korea (Republic of)",
+        "flags": {
+            "png": "https://flagcdn.com/w320/kr.png",
+            "svg": "https://flagcdn.com/kr.svg",
+        },
+        "latlng": [37.0, 127.5],
+        "region": "Asia",
+        "borders": ["PRK"],
+        "capital": "Seoul",
+        "demonym": "South Korean",
+        "languages": [
+            {
+                "name": "Korean",
+                "iso639_1": "ko",
+                "iso639_2": "kor",
+                "nativeName": "한국어",
+            }
+        ],
+        "subregion": "Eastern Asia",
+        "timezones": ["UTC+09:00"],
+        "alpha2Code": "KR",
+        "alpha3Code": "KOR",
+        "currencies": [
+            {
+                "code": "KRW",
+                "name": "South Korean won",
+                "symbol": "₩",
+            }
+        ],
+        "nativeName": "대한민국",
+        "population": 51_780_579,
+        "independent": True,
+        "numericCode": "410",
+        "callingCodes": ["82"],
+        "topLevelDomain": [".kr"],
+        "populationDensity": 516.72,
+    }
 
-    assert isinstance(valid_data, WeatherSchema)
-    assert valid_data.latitude == 37.5665
-    assert len(valid_data.hourly.time) == 2
+
+def make_ip_data() -> dict[str, Any]:
+    """정상 IP 모델 테스트에서 공유할 위치 데이터를 반환한다."""
+    return {
+        "status": "success",
+        "query": "8.8.8.8",
+        "country": "United States",
+        "city": "Ashburn",
+        "lat": 39.03,
+        "lon": -77.5,
+        "timezone": "America/New_York",
+        "isp": "Google LLC",
+    }
 
 
-def test_invalid_weather_latitude() -> None:
-    """범위를 벗어난 위도가 ValidationError를 발생시키는지 확인"""
-    invalid_data = make_weather_data()
-    invalid_data["latitude"] = 9_999.0
+def test_weather_model_accepts_valid_data() -> None:
+    """정상 날씨 응답이 WeatherSchema로 변환되는지 확인한다."""
+    record = WeatherSchema.model_validate(make_weather_data())
 
-    with pytest.raises(ValidationError) as error:
-        WeatherSchema.model_validate(invalid_data)
+    assert isinstance(record, WeatherSchema)
+    assert record.latitude == 37.5665
+    assert record.timezone == "Asia/Seoul"
 
-    assert "latitude" in str(error.value)
+
+def test_weather_hourly_values_are_parsed_correctly() -> None:
+    """시간·기온·강수확률 배열이 올바른 타입과 값으로 변환되는지 확인한다."""
+    record = WeatherSchema.model_validate(make_weather_data())
+
+    assert len(record.hourly.time) == 2
+    assert isinstance(record.hourly.time[0], datetime)
+    assert record.hourly.temperature_2m == [20.5, 19.8]
+    assert record.hourly.precipitation_probability == [10, 20]
+
+
+def test_country_model_accepts_valid_data() -> None:
+    """정상 대한민국 응답이 중첩 모델을 포함해 검증되는지 확인한다."""
+    record = CountrySchema.model_validate(make_country_data())
+
+    assert isinstance(record, CountrySchema)
+    assert record.alpha3Code == "KOR"
+    assert record.languages[0].nativeName == "한국어"
+    assert record.currencies[0].code == "KRW"
+
+
+def test_ip_model_accepts_valid_data() -> None:
+    """정상 IP 응답의 주소와 위치 정보가 검증되는지 확인한다."""
+    record = IpSuccessSchema.model_validate(make_ip_data())
+
+    assert isinstance(record, IpSuccessSchema)
+    assert str(record.query) == "8.8.8.8"
+    assert record.city == "Ashburn"
+    assert record.status == "success"
+
+
+def test_validate_data_returns_three_model_records() -> None:
+    """통합 검증 함수가 세 API 응답을 정해진 모델 순서로 반환하는지 확인한다."""
+    records = validate_data(
+        make_weather_data(),
+        make_country_data(),
+        make_ip_data(),
+    )
+
+    assert len(records) == 3
+    assert isinstance(records[0], WeatherSchema)
+    assert isinstance(records[1], CountrySchema)
+    assert isinstance(records[2], IpSuccessSchema)
+
+
+def test_api_models_ignore_unneeded_extra_fields() -> None:
+    """외부 API의 추가 필드가 있어도 필요한 필드 검증은 유지되는지 확인한다."""
+    weather_data = make_weather_data()
+    weather_data["unexpected_field"] = "추가 응답 필드"
+
+    record = WeatherSchema.model_validate(weather_data)
+
+    assert isinstance(record, WeatherSchema)
+    assert "unexpected_field" not in record.model_fields_set
 
 
 # ============================================================

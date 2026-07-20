@@ -12,10 +12,13 @@
 """
 
 import asyncio
+from datetime import datetime
 from time import perf_counter
 from pathlib import Path
-from typing import Any
+from typing import Any, Annotated, Literal
 import httpx
+from pydantic import BaseModel, Field, model_validator, HttpUrl, ValidationError, IPvAnyAddress
+
 
 BASE_DIR = Path(__file__).resolve().parent
 OUTPUT_DIR = BASE_DIR / "output"
@@ -41,13 +44,150 @@ async def fetch_json(client: httpx.AsyncClient, api_name: str, url: str) -> dict
 async def collect_all() -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     """asyncio.gether()로 3개 API를 비동기로 호출하고 결과 수집"""
     async with httpx.AsyncClient() as client:
-        weather_json, country_json, ip_json = await asyncio.gather(
+        return await asyncio.gather(
             fetch_json(client, "Weather API", WEATHER_URL),
             fetch_json(client, "Country API", COUNTRY_URL),
             fetch_json(client, "IP API", IP_URL),
         )
-    
-    return weather_json, country_json, ip_json
+
+
+# ============================================================
+# 2) Pydantic v2 스키마 검증
+# ============================================================
+Latitude = Annotated[float, Field(ge=-90, le=90)]
+Longitude = Annotated[float, Field(ge=-180, le=180)]
+Temperature = Annotated[float, Field(ge=-90, le=60)]
+Probability = Annotated[int, Field(ge=0, le=100)]
+
+
+class HourlyUnits(BaseModel):
+    """Open-Meteo 시간별 데이터 단위."""
+
+    time: Literal["iso8601"]
+    temperature_2m: Literal["°C"]
+    precipitation_probability: Literal["%"]
+
+
+class HourlyWeather(BaseModel):
+    """시간·기온·강수확률 배열."""
+
+    time: list[datetime] = Field(min_length=1)
+    temperature_2m: list[Temperature] = Field(min_length=1)
+    precipitation_probability: list[Probability] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def check_same_length(self) -> "HourlyWeather":
+        lengths = {
+            len(self.time),
+            len(self.temperature_2m),
+            len(self.precipitation_probability),
+        }
+        if len(lengths) != 1:
+            raise ValueError(
+                "time, temperature_2m, precipitation_probability "
+                "배열 길이가 다릅니다."
+            )
+        return self
+
+
+class WeatherSchema(BaseModel):
+    """서울 3일 시간대별 기온·강수확률"""
+    latitude: Latitude
+    longitude: Longitude
+    generationtime_ms: float = Field(ge=0)
+    utc_offset_seconds: int = Field(ge=-86_400, le=86_400)
+    timezone: str = Field(min_length=1)
+    timezone_abbreviation: str = Field(min_length=1)
+    elevation: float = Field(ge=-500, le=9_000)
+    hourly_units: HourlyUnits
+    hourly: HourlyWeather
+
+
+class FlagUrls(BaseModel):
+    png: HttpUrl
+    svg: HttpUrl
+
+
+class Language(BaseModel):
+    name: str = Field(min_length=1)
+    iso639_1: str = Field(pattern=r"^[a-z]{2}$")
+    iso639_2: str = Field(pattern=r"^[a-z]{3}$")
+    nativeName: str = Field(min_length=1)
+
+
+class Currency(BaseModel):
+    code: str = Field(pattern=r"^[A-Z]{3}$")
+    name: str = Field(min_length=1)
+    symbol: str = Field(min_length=1)
+
+
+class CountrySchema(BaseModel):
+    """대한민국 국가 정보."""
+
+    area: float = Field(gt=0)
+    cioc: str = Field(pattern=r"^[A-Z]{3}$")
+    flag: str = Field(min_length=1)
+    gini: float = Field(ge=0, le=100)
+    name: str = Field(min_length=1)
+    flags: FlagUrls
+    latlng: tuple[Latitude, Longitude]
+    region: str = Field(min_length=1)
+    borders: list[str]
+    capital: str = Field(min_length=1)
+    demonym: str = Field(min_length=1)
+    languages: list[Language] = Field(min_length=1)
+    subregion: str = Field(min_length=1)
+    timezones: list[str] = Field(min_length=1)
+    alpha2Code: str = Field(pattern=r"^[A-Z]{2}$")
+    alpha3Code: str = Field(pattern=r"^[A-Z]{3}$")
+    currencies: list[Currency] = Field(min_length=1)
+    nativeName: str = Field(min_length=1)
+    population: int = Field(gt=0)
+    independent: bool
+    numericCode: str = Field(pattern=r"^\d{3}$")
+    callingCodes: list[str] = Field(min_length=1)
+    topLevelDomain: list[str] = Field(min_length=1)
+    populationDensity: float = Field(ge=0)
+
+class IpSuccessSchema(BaseModel):
+    """ip-api 정상 응답."""
+
+    status: Literal["success"]
+    query: IPvAnyAddress
+    country: str = Field(min_length=1)
+    city: str = Field(min_length=1)
+    lat: Latitude
+    lon: Longitude
+    timezone: str = Field(min_length=1)
+    isp: str = Field(min_length=1)
+
+
+class IpFailSchema(BaseModel):
+    """ip-api 실패 응답."""
+
+    status: Literal["fail"]
+    message: str = Field(min_length=1)
+
+CollectedRecord = WeatherSchema | CountrySchema | IpSuccessSchema
+
+def validate_data(
+        weather_json: dict[str, Any],
+        country_json: dict[str, Any],
+        ip_json: dict[str, Any],
+) -> list[CollectedRecord]:
+    """API JSON에서 필요한 필드만 추출하여 Pydantic v2 모델로 타입·범위 검증"""
+    weather_record = WeatherSchema.model_validate(weather_json)
+    country_record = CountrySchema.model_validate(country_json)
+
+    if ip_json.get("status") == "fail":
+        failed_ip = IpFailSchema.model_validate(ip_json)
+        raise ValueError(f"IP API 실패: {failed_ip.message}")
+
+    ip_record = IpSuccessSchema.model_validate(ip_json)
+
+    print(f"검증 완료: {len([weather_record, country_record, ip_record])}개 레코드")
+
+    return [weather_record, country_record, ip_record]
 
 
 # ============================================================
@@ -56,13 +196,26 @@ async def collect_all() -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]
 def main() -> None:
     """3개 API를 비동기로 수집하고, CSV와 Parquet 저장 성능을 비교한다."""
     try:
-        print("--------- 1) 비동기 수집 ---------")
+        print("\n--------- 1) 비동기 수집 ---------")
         collected_json = asyncio.run(collect_all())
         print(f"수집 완료: {len(collected_json)}개 API")
-    except (
-        httpx.HTTPError,
-    ) as error:
-        print(f"파이프라인 실행 실패: {error}")
+
+        print("\n--------- 2) Pydantic v2 스키마 검증 ---------")
+        validated_data = validate_data(*collected_json)
+        
+        for record in validated_data:
+            print(f"- {record.__class__.__name__}: 검증 성공")
+
+    except httpx.HTTPError as error:
+        print(f"HTTP 요청 실패: {error}")
+        raise SystemExit(1) from error
+
+    except ValidationError as error:
+        print(f"Pydantic 검증 실패:\n{error}")
+        raise SystemExit(1) from error
+
+    except (KeyError, TypeError, ValueError) as error:
+        print(f"데이터 처리 실패: {error}")
         raise SystemExit(1) from error
 
 

@@ -299,7 +299,7 @@ def save_and_compare(records: list[CollectedRecord]) -> None:
 
 # ============================================================
 # 4) pytest 스키마 테스트 + Ruff 검사
-# 실행: python -m pytest main.py -q
+# 실행: python -m pytest main.py -v
 # 실행: python -m ruff check main.py --select E,F,I,UP
 # ============================================================
 def make_weather_data() -> dict[str, Any]:
